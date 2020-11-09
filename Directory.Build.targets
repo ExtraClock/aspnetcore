@@ -107,7 +107,8 @@
         '$(IsTestProject)' != 'true' ">true</IsImplementationProject>
 
     <!-- This determines whether a project is available as a <Reference> to other projects in this repo. -->
-    <IsProjectReferenceProvider Condition=" '$(IsProjectReferenceProvider)' == '' AND '$(IsImplementationProject)' == 'true' ">true</IsProjectReferenceProvider>
+    <IsProjectReferenceProvider Condition=" '$(IsProjectReferenceProvider)' == '' AND
+        ( '$(IsImplementationProject)' == 'true' OR '$(IsSpecificationTestProject)' == 'true' ) ">true</IsProjectReferenceProvider>
 
     <HasReferenceAssembly
         Condition=" '$(TargetFramework)' == '$(DefaultNetCoreTargetFramework)' AND '$(IsAspNetCoreApp)' == 'true' ">true</HasReferenceAssembly>
