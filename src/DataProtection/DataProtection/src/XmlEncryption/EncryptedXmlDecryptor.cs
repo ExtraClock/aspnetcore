@@ -82,11 +82,105 @@ namespace Microsoft.AspNetCore.DataProtection.XmlEncryption
         private class EncryptedXmlWithCertificateKeys : EncryptedXml
         {
             private readonly XmlKeyDecryptionOptions _options;
+            private readonly XmlDocument m_document;
+            private readonly System.Collections.Hashtable m_keyNameMapping;
 
             public EncryptedXmlWithCertificateKeys(XmlKeyDecryptionOptions options, XmlDocument document)
                 : base(document)
             {
                 _options = options;
+                m_document = document;
+                this.m_keyNameMapping = new System.Collections.Hashtable(4);
+            }
+
+            
+            public override SymmetricAlgorithm GetDecryptionKey(EncryptedData encryptedData, string symmetricAlgorithmUri)
+            {
+                if (encryptedData == null)
+                {
+                    throw new ArgumentNullException("encryptedData");
+                }
+                if (encryptedData.KeyInfo == null)
+                {
+                    return null;
+                }
+                var enumerator = encryptedData.KeyInfo.GetEnumerator();
+                EncryptedKey encryptedKey = null;
+                while (true)
+                {
+                    if (enumerator.MoveNext())
+                    {
+                        KeyInfoName current = enumerator.Current as KeyInfoName;
+                        if (current == null)
+                        {
+                            KeyInfoRetrievalMethod method = enumerator.Current as KeyInfoRetrievalMethod;
+                            if (method != null)
+                            {
+                                string idValue = (string)null ?? throw new Exception("1");// System.Security.Cryptography.Xml.Utils.ExtractIdFromLocalUri(method.Uri);
+                                encryptedKey = new EncryptedKey();
+                                encryptedKey.LoadXml(this.GetIdElement(this.m_document, idValue));
+                            }
+                            else
+                            {
+                                KeyInfoEncryptedKey key = enumerator.Current as KeyInfoEncryptedKey;
+                                if (key == null)
+                                {
+                                    continue;
+                                }
+                                encryptedKey = key.EncryptedKey;
+                            }
+                        }
+                        else
+                        {
+                            string str = current.Value;
+                            if (((SymmetricAlgorithm)this.m_keyNameMapping[str]) != null)
+                            {
+                                return (SymmetricAlgorithm)this.m_keyNameMapping[str];
+                            }
+                            XmlNamespaceManager nsmgr = new XmlNamespaceManager(this.m_document.NameTable);
+                            nsmgr.AddNamespace("enc", "http://www.w3.org/2001/04/xmlenc#");
+                            XmlNodeList list = this.m_document.SelectNodes("//enc:EncryptedKey", nsmgr);
+                            if (list != null)
+                            {
+                                foreach (XmlNode node in list)
+                                {
+                                    XmlElement element = node as XmlElement;
+                                    EncryptedKey key3 = new EncryptedKey();
+                                    key3.LoadXml(element);
+                                    if ((key3.CarriedKeyName == str) && (key3.Recipient == this.Recipient))
+                                    {
+                                        encryptedKey = key3;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if (encryptedKey == null)
+                    {
+                        return null;
+                    }
+                    if (symmetricAlgorithmUri == null)
+                    {
+                        if (encryptedData.EncryptionMethod == null)
+                        {
+                            throw new CryptographicException("Cryptography_Xml_MissingAlgorithm");
+                        }
+                        symmetricAlgorithmUri = encryptedData.EncryptionMethod.KeyAlgorithm;
+                    }
+                    byte[] buffer = this.DecryptEncryptedKey(encryptedKey);
+                    if (buffer == null)
+                    {
+                        throw new CryptographicException("Cryptography_Xml_MissingDecryptionKey");
+                    }
+                    SymmetricAlgorithm algorithm = (SymmetricAlgorithm)CryptoConfig.CreateFromName(symmetricAlgorithmUri);
+                    if (algorithm == null)
+                    {
+                        throw new CryptographicException("Cryptography_Xml_MissingAlgorithm");
+                    }
+                    algorithm.Key = buffer;
+                    return algorithm;
+                }
             }
 
             public override byte[] DecryptEncryptedKey(EncryptedKey encryptedKey)
