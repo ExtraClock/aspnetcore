@@ -93,95 +93,90 @@ namespace Microsoft.AspNetCore.DataProtection.XmlEncryption
                 this.m_keyNameMapping = new System.Collections.Hashtable(4);
             }
 
-            
             public override SymmetricAlgorithm GetDecryptionKey(EncryptedData encryptedData, string symmetricAlgorithmUri)
             {
                 if (encryptedData == null)
-                {
                     throw new ArgumentNullException("encryptedData");
-                }
+
                 if (encryptedData.KeyInfo == null)
-                {
                     return null;
-                }
-                var enumerator = encryptedData.KeyInfo.GetEnumerator();
-                EncryptedKey encryptedKey = null;
-                while (true)
+                var keyInfoEnum = encryptedData.KeyInfo.GetEnumerator();
+                KeyInfoRetrievalMethod kiRetrievalMethod;
+                KeyInfoName kiName;
+                KeyInfoEncryptedKey kiEncKey;
+                EncryptedKey ek = null;
+
+                while (keyInfoEnum.MoveNext())
                 {
-                    if (enumerator.MoveNext())
+                    kiName = keyInfoEnum.Current as KeyInfoName;
+                    if (kiName != null)
                     {
-                        KeyInfoName current = enumerator.Current as KeyInfoName;
-                        if (current == null)
+                        // Get the decryption key from the key mapping
+                        string keyName = kiName.Value;
+                        if ((SymmetricAlgorithm)m_keyNameMapping[keyName] != null)
+                            return (SymmetricAlgorithm)m_keyNameMapping[keyName];
+                        // try to get it from a CarriedKeyName
+                        XmlNamespaceManager nsm = new XmlNamespaceManager(m_document.NameTable);
+                        nsm.AddNamespace("enc", EncryptedXml.XmlEncNamespaceUrl);
+                        XmlNodeList encryptedKeyList = m_document.SelectNodes("//enc:EncryptedKey", nsm);
+                        if (encryptedKeyList != null)
                         {
-                            KeyInfoRetrievalMethod method = enumerator.Current as KeyInfoRetrievalMethod;
-                            if (method != null)
+                            foreach (XmlNode encryptedKeyNode in encryptedKeyList)
                             {
-                                string idValue = (string)null ?? throw new Exception("1");// System.Security.Cryptography.Xml.Utils.ExtractIdFromLocalUri(method.Uri);
-                                encryptedKey = new EncryptedKey();
-                                encryptedKey.LoadXml(this.GetIdElement(this.m_document, idValue));
-                            }
-                            else
-                            {
-                                KeyInfoEncryptedKey key = enumerator.Current as KeyInfoEncryptedKey;
-                                if (key == null)
+                                XmlElement encryptedKeyElement = encryptedKeyNode as XmlElement;
+                                EncryptedKey ek1 = new EncryptedKey();
+                                ek1.LoadXml(encryptedKeyElement);
+                                if (ek1.CarriedKeyName == keyName && ek1.Recipient == this.Recipient)
                                 {
-                                    continue;
-                                }
-                                encryptedKey = key.EncryptedKey;
-                            }
-                        }
-                        else
-                        {
-                            string str = current.Value;
-                            if (((SymmetricAlgorithm)this.m_keyNameMapping[str]) != null)
-                            {
-                                return (SymmetricAlgorithm)this.m_keyNameMapping[str];
-                            }
-                            XmlNamespaceManager nsmgr = new XmlNamespaceManager(this.m_document.NameTable);
-                            nsmgr.AddNamespace("enc", "http://www.w3.org/2001/04/xmlenc#");
-                            XmlNodeList list = this.m_document.SelectNodes("//enc:EncryptedKey", nsmgr);
-                            if (list != null)
-                            {
-                                foreach (XmlNode node in list)
-                                {
-                                    XmlElement element = node as XmlElement;
-                                    EncryptedKey key3 = new EncryptedKey();
-                                    key3.LoadXml(element);
-                                    if ((key3.CarriedKeyName == str) && (key3.Recipient == this.Recipient))
-                                    {
-                                        encryptedKey = key3;
-                                        break;
-                                    }
+                                    ek = ek1;
+                                    break;
                                 }
                             }
                         }
+                        break;
                     }
-                    if (encryptedKey == null)
+                    kiRetrievalMethod = keyInfoEnum.Current as KeyInfoRetrievalMethod;
+                    if (kiRetrievalMethod != null)
                     {
-                        return null;
+                        string idref = (string)null ?? throw new Exception("Utils.ExtractIdFromLocalUri(kiRetrievalMethod.Uri)");
+                        ek = new EncryptedKey();
+                        ek.LoadXml(GetIdElement(m_document, idref));
+                        break;
                     }
+                    kiEncKey = keyInfoEnum.Current as KeyInfoEncryptedKey;
+                    if (kiEncKey != null)
+                    {
+                        ek = kiEncKey.EncryptedKey;
+                        break;
+                    }
+                }
+
+                // if we have an EncryptedKey, decrypt to get the symmetric key
+                if (ek != null)
+                {
+                    // now process the EncryptedKey, loop recursively 
+                    // If the Uri is not provided by the application, try to get it from the EncryptionMethod
                     if (symmetricAlgorithmUri == null)
                     {
                         if (encryptedData.EncryptionMethod == null)
-                        {
                             throw new CryptographicException("Cryptography_Xml_MissingAlgorithm");
-                        }
                         symmetricAlgorithmUri = encryptedData.EncryptionMethod.KeyAlgorithm;
                     }
-                    byte[] buffer = this.DecryptEncryptedKey(encryptedKey);
-                    if (buffer == null)
-                    {
+                    byte[] key = DecryptEncryptedKey(ek);
+                    if (key == null)
                         throw new CryptographicException("Cryptography_Xml_MissingDecryptionKey");
-                    }
-                    SymmetricAlgorithm algorithm = (SymmetricAlgorithm)CryptoConfig.CreateFromName(symmetricAlgorithmUri);
-                    if (algorithm == null)
+
+                    SymmetricAlgorithm symAlg = (SymmetricAlgorithm)CryptoConfig.CreateFromName(symmetricAlgorithmUri);
+                    if (symAlg == null)
                     {
                         throw new CryptographicException("Cryptography_Xml_MissingAlgorithm");
                     }
-                    algorithm.Key = buffer;
-                    return algorithm;
+                    symAlg.Key = key;
+                    return symAlg;
                 }
+                return null;
             }
+
 
             public override byte[] DecryptEncryptedKey(EncryptedKey encryptedKey)
             {
